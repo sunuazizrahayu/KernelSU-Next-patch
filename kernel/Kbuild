@@ -103,10 +103,31 @@ $(info -- KernelSU-Next Git repo detected at: $(GIT_ROOT))
 endif
 endif
 
+# X625D 4.9 port (CI patch-flow) override: explicit version files win over
+# git-derived values. The pristine legacy-patch base tip (b933b1f7) carries a
+# shorter upstream history than the port lineage, so rev-count/describe would
+# embed a wrong version; these files pin the true v3.4.2 identity.
+KSU_VERSION_OVERRIDE_FILE := $(MDIR)ksu_version.txt
+KSU_VERSION_TAG_OVERRIDE_FILE := $(MDIR)ksu_version_tag.txt
+ifneq ($(wildcard $(KSU_VERSION_OVERRIDE_FILE)),)
+KSU_GIT_VERSION := $(strip $(shell cat $(KSU_VERSION_OVERRIDE_FILE)))
+KSU_GIT_VERSION_IS_FINAL := 1
+KSU_GIT_VERSION_VALID := 1
+$(info -- KernelSU-Next version override from ksu_version.txt: $(KSU_GIT_VERSION))
+endif
+ifneq ($(wildcard $(KSU_VERSION_TAG_OVERRIDE_FILE)),)
+KSU_GIT_TAG := $(strip $(shell cat $(KSU_VERSION_TAG_OVERRIDE_FILE)))
+$(info -- KernelSU-Next tag override from ksu_version_tag.txt: $(KSU_GIT_TAG))
+endif
+
 # Calculate version if git version is available
 ifdef KSU_GIT_VERSION_VALID
 # ksu_version: major * 30000 + git version for historical reasons
+ifeq ($(KSU_GIT_VERSION_IS_FINAL),1)
+$(eval KSU_VERSION=$(KSU_GIT_VERSION))
+else
 $(eval KSU_VERSION=$(shell expr 30000 + $(KSU_GIT_VERSION)))
+endif
 $(info -- KernelSU-Next version: $(KSU_VERSION))
 ccflags-y += -DKSU_VERSION=$(KSU_VERSION)
 else
