@@ -29,6 +29,8 @@
 #include <linux/types.h>
 #include <linux/uaccess.h>
 #include <linux/namei.h>
+#include <linux/delay.h>
+#include <linux/pid.h>
 #include <linux/workqueue.h>
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
 #include <linux/sched/signal.h>
@@ -296,6 +298,107 @@ static void ksu_initialize_selinux_tw_func(struct callback_head *cb)
 	kfree(cb);
 }
 
+/* Boot zygote respawn gate for Zygisk Next.
+ *
+ * Mechanism: zn-daemon ptrace-attaches init right after start to intercept
+ * every NEW zygote fork (tracefork), so a zygote can only be injected when
+ * its fork happens after the daemon attach completes. On 4.9 MTK ROMs init
+ * forks/execs the boot zygote ~150 ms after the post-fs-data trigger, while
+ * the module script can only start the daemon ~700 ms later (allowlist
+ * loading, mounts, ...) and the attach takes another ~500 ms: the boot
+ * zygotes are permanently missed and the daemon has no retry (deterministic
+ * race, reproduced on every boot).
+ *
+ * Empirically, killing both boot zygotes AFTER the daemon attach always
+ * produces an injected respawn (init re-forks them under the traced flow).
+ * This gate performs that respawn automatically from the kernel, no
+ * userspace helper needed: a dedicated workqueue polls for a task named
+ * "zn-daemon", waits a margin for its attach phase, then SIGKILLs zygote64
+ * and zygote once. Without Zygisk Next installed the daemon never appears,
+ * nothing is killed and the boot is untouched. */
+#define KSU_ZN_GATE_DAEMON_COMM "zn-daemon"
+#define KSU_ZN_GATE_POLL_MS 100
+#define KSU_ZN_GATE_PATIENT_MS 3000
+#define KSU_ZN_GATE_ATTACH_MARGIN_MS 1500
+
+static bool ksu_zn_gate_fired = false;
+static struct workqueue_struct *ksu_zn_gate_wq;
+
+static bool ksu_zn_gate_task_by_comm(const char *comm, pid_t *out)
+{
+	struct task_struct *task;
+	bool found = false;
+
+	rcu_read_lock();
+	for_each_process(task) {
+		if (!strcmp(task->comm, comm)) {
+			if (out)
+				*out = task->pid;
+			found = true;
+			break;
+		}
+	}
+	rcu_read_unlock();
+	return found;
+}
+
+static void ksu_zn_gate_kill_comm(const char *comm)
+{
+	pid_t pid;
+	struct pid *spid;
+
+	if (!ksu_zn_gate_task_by_comm(comm, &pid))
+		return;
+	spid = find_get_pid(pid);
+	if (!spid)
+		return;
+	kill_pid(spid, SIGKILL, 1);
+	put_pid(spid);
+	pr_info("zngate: SIGKILL %s (pid %d), init will respawn it under the traced flow\n",
+		comm, pid);
+}
+
+static void ksu_zn_gate_workfn(struct work_struct *work)
+{
+	int waited = 0;
+	bool daemon_seen = false;
+
+	if (ksu_zn_gate_fired)
+		return;
+	while (waited <= KSU_ZN_GATE_PATIENT_MS) {
+		if (ksu_zn_gate_task_by_comm(KSU_ZN_GATE_DAEMON_COMM, NULL)) {
+			daemon_seen = true;
+			break;
+		}
+		msleep(KSU_ZN_GATE_POLL_MS);
+		waited += KSU_ZN_GATE_POLL_MS;
+	}
+	if (!daemon_seen) {
+		pr_info("zngate: no zn-daemon after %d ms, gate released\n",
+			waited);
+		return;
+	}
+	ksu_zn_gate_fired = true;
+	msleep(KSU_ZN_GATE_ATTACH_MARGIN_MS);
+	pr_info("zngate: attach margin elapsed, respawning boot zygotes\n");
+	ksu_zn_gate_kill_comm("zygote64");
+	ksu_zn_gate_kill_comm("zygote");
+}
+
+static DECLARE_WORK(ksu_zn_gate_work, ksu_zn_gate_workfn);
+
+static void ksu_zn_gate_bootstrap(void)
+{
+	if (ksu_zn_gate_fired)
+		return;
+	if (!ksu_zn_gate_wq) {
+		ksu_zn_gate_wq = alloc_workqueue("ksu-zngate", WQ_UNBOUND, 1);
+		if (!ksu_zn_gate_wq)
+			return;
+	}
+	queue_work(ksu_zn_gate_wq, &ksu_zn_gate_work);
+}
+
 // IMPORTANT NOTE: the call from execve_handler_pre WON'T provided correct value for envp and flags in GKI version
 int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
 				struct user_arg_ptr *argv,
@@ -399,6 +502,10 @@ int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
 		if (check_argv(*argv, 1, "-Xzygote", buf, sizeof(buf))) {
 			pr_info("exec zygote, /data prepared, second_stage: %d\n",
 				init_second_stage_executed);
+			/* first boot zygote is forked before zn-daemon can
+			 * attach (permanent race on MTK 4.9), schedule the
+			 * in-kernel respawn gate on its own workqueue */
+			ksu_zn_gate_bootstrap();
 			rcu_read_lock();
 			struct task_struct *init_task =
 				rcu_dereference(current->real_parent);
