@@ -1,8 +1,23 @@
 menu "KernelSU"
 
+config KSU_MANUAL_HOOK
+	bool "KernelSU manual hook mode (4.9 port)"
+	depends on KSU
+	default y
+	help
+	  Enable 4.9 manual syscall hook mode (plain-args ABI).
+	  Applied by the ksrc-port integration; keeps pt_regs dynamic-hook
+	  sources excluded from the build.
+
+config KSU_49_PORT
+	bool "Internal marker for X625D 4.9 port build"
+	depends on KSU
+	default y
+
+
 config KSU
 	tristate "KernelSU function support"
-	depends on KPROBES && EXT4_FS
+	depends on EXT4_FS
 	default y
 	help
 	  Enable kernel-level root privileges on Android System.

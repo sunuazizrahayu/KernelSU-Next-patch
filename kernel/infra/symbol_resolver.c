@@ -3,6 +3,11 @@
 #include <linux/string.h>
 #include <linux/version.h>
 
+// __nocfi is an arm64-only attribute; make it a no-op elsewhere
+#ifndef __nocfi
+#define __nocfi
+#endif
+
 #include "infra/symbol_resolver.h"
 
 // https://github.com/torvalds/linux/commit/89245600941e4e0f87d77f60ee269b5e61ef4e49
@@ -175,13 +180,13 @@ void *ksu_resolve_symbol_for_functable_hook(const char *symbol_name)
 void __init ksu_init_symbol_resolver()
 {
 #if !ALWAYS_HAVE_ON_EACH_SYMBOL
-    kallsyms_on_each_symbol_fn = find_kernel_symbol_exact("kallsyms_on_each_symbol");
+    kallsyms_on_each_symbol_fn = (void *)find_kernel_symbol_exact("kallsyms_on_each_symbol");
     if (!kallsyms_on_each_symbol_fn) {
         pr_warn("kallsyms_on_each_symbol not found!\n");
     }
 #endif
 #if HAVE_ON_EACH_MATCH_SYMBOL
-    kallsyms_on_each_match_symbol_fn = find_kernel_symbol_exact("kallsyms_on_each_match_symbol");
+    kallsyms_on_each_match_symbol_fn = (void *)find_kernel_symbol_exact("kallsyms_on_each_match_symbol");
     if (!kallsyms_on_each_match_symbol_fn) {
         pr_warn("kallsyms_on_each_match_symbol not found!\n");
     }

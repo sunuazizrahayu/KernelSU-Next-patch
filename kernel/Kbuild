@@ -1,24 +1,17 @@
 kernelsu-objs := core/init.o
+kernelsu-objs += compat/kernel_compat.o
+kernelsu-objs += compat/manual_hook_49.o
+kernelsu-objs += compat/mtk_trace_points.o
 
 kernelsu-objs += feature/kernel_umount.o
 kernelsu-objs += feature/module_blacklist.o
 kernelsu-objs += feature/sulog.o
 kernelsu-objs += feature/sucompat.o
 
-kernelsu-objs += hook/lsm_hook.o
 kernelsu-objs += hook/setuid_hook.o
-kernelsu-objs += hook/syscall_event_bridge.o
-kernelsu-objs += hook/syscall_hook_manager.o
-kernelsu-objs += hook/tp_marker.o
 ifeq ($(CONFIG_ARM64),y)
-kernelsu-objs += hook/arm64/patch_memory.o
-kernelsu-objs += hook/arm64/syscall_hook.o
 else ifeq ($(CONFIG_X86_64),y)
-kernelsu-objs += hook/x86_64/patch_memory.o
-kernelsu-objs += hook/x86_64/syscall_hook.o
 else ifeq ($(CONFIG_RISCV),y)
-kernelsu-objs += hook/riscv64/patch_memory.o
-kernelsu-objs += hook/riscv64/syscall_hook.o
 endif
 kernelsu-objs += extras.o
 
@@ -159,7 +152,12 @@ ccflags-y += -DEXPECTED_MANAGER_HASH=\"$(KSU_NEXT_MANAGER_HASH)\"
 
 ccflags-y += -DKSU_NEW_DCACHE_FLUSH=$(KSU_NEW_DCACHE_FLUSH)
 
-ccflags-y += -Wno-strict-prototypes -Wno-int-conversion -Wno-gcc-compat -Wno-missing-prototypes -Wno-missing-declarations
+ccflags-y += -Wno-strict-prototypes -Wno-missing-prototypes -Wno-missing-declarations
 ccflags-y += -Wno-declaration-after-statement -Wno-unused-function -Wno-unused-variable
+
+ifeq ($(CONFIG_KSU_MANUAL_HOOK),y)
+ccflags-y += -DKSU_MANUAL_HOOK
+endif
+ccflags-y += -D__nocfi=
 
 # Keep a new line here!! Because someone may append config

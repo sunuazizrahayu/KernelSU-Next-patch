@@ -1,4 +1,5 @@
 #include <linux/export.h>
+#include "feature/sucompat.h"
 #include <linux/fs.h>
 #include <linux/kobject.h>
 #include <linux/module.h>
@@ -15,6 +16,15 @@
 #include "hook/syscall_hook_manager.h"
 #include "hook/lsm_hook.h"
 #include "runtime/ksud.h"
+
+/*
+ * v3.4.2: defined in runtime/ksud_integration.c but present in no header;
+ * struct user_arg_ptr is local to fs/exec.c (ksud_integration.c defines an
+ * identical copy), so the prototype just uses struct pointers.
+ */
+int ksu_handle_execveat_ksud(int *fd, struct filename **filename_ptr,
+                                        struct user_arg_ptr *argv,
+                                        struct user_arg_ptr *envp, int *flags);
 #include "runtime/ksud_boot.h"
 #include "supercall/supercall.h"
 #include "ksu.h"
@@ -27,6 +37,21 @@
 #include "feature/shell_su_adb_only.h"
 #include "feature/sulog.h"
 #include "infra/symbol_resolver.h"
+#ifdef KSU_MANUAL_HOOK
+/* 4.9 manual-hook entry: called from a patched do_execveat_common() in fs/exec.c */
+int ksu_handle_execveat(int *fd, struct filename **filename_ptr, void *argv,
+			void *envp, int *flags)
+{
+	struct filename *fn = filename_ptr ? *filename_ptr : NULL;
+
+	if (fn && !IS_ERR(fn))
+		ksu_handle_execveat_ksud(fd, filename_ptr,
+				(struct user_arg_ptr *)argv,
+				(struct user_arg_ptr *)envp, flags);
+	return ksu_handle_execveat_sucompat(fd, filename_ptr, argv, envp, flags);
+}
+#endif
+
 
 #if defined(__x86_64__) && !defined(CONFIG_KSU_X86_PATCH_SYSCALL_DISPATCHER)
 #include <asm/cpufeature.h>
